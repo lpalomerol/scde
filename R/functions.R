@@ -1127,7 +1127,24 @@ winsorize.matrix <- function(mat, trim) {
 ##' }
 ##'
 ##' @export
-knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), min.nonfailed = 5, min.count.threshold = 1, save.model.plots = TRUE, max.model.plots = 50, n.cores = parallel::detectCores(), min.size.entries = 2e3, min.fpm = 0, cor.method = "pearson", verbose = 0, fpm.estimate.trim = 0.25, linear.fit = TRUE, local.theta.fit = linear.fit, theta.fit.range = c(1e-2, 1e2), alpha.weight.power = 1/2) {
+knn.error.models <- function(
+  counts, groups = NULL, 
+  k = round(ncol(counts)/2), 
+  min.nonfailed = 5, 
+  min.count.threshold = 1, 
+  save.model.plots = TRUE, 
+  max.model.plots = 50, 
+  n.cores = parallel::detectCores(), 
+  min.size.entries = 2e3, 
+  min.fpm = 0, 
+  cor.method = "pearson", 
+  verbose = 0, 
+  fpm.estimate.trim = 0.25, 
+  linear.fit = TRUE, 
+  local.theta.fit = linear.fit, 
+  theta.fit.range = c(1e-2, 1e2), 
+  alpha.weight.power = 1/2
+) {
     threshold.prior = 1-1e-6
 
     # check for integer counts
@@ -1152,6 +1169,7 @@ knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), m
     ls <- estimate.library.sizes(counts, NULL, groups, min.size.entries, verbose = verbose, return.details = TRUE, vil = counts >= min.count.threshold)
     ca <- counts
     ca[ca<min.count.threshold] <- NA # a version of counts with all "drop-out" components set to NA
+
     mll <- tapply(colnames(counts), groups, function(ids) {
         # use Spearman rank correlation on pairwise complete observations to establish distance relationships between cells
         group <- as.character(groups[ids[1]])
@@ -1185,23 +1203,52 @@ knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), m
         }
 
         if(verbose)  message(paste("fitting", group, "models:"))
-
-        ml <- papply(seq_along(ids), function(i) { try({
-            if(verbose)  message(paste(group, '.', i, " : ", ids[i], sep = ""))
+        cl = makeCluster(n.cores, outfile = './scde.parallel.txt')
+        ml <- parLapply(cl, seq_along(ids), function(i, ids, celld, 
+                                                  ca, fpm.estimate.trim,
+                                                  counts, 
+                                                  fit.nb2gth.mixture.model, 
+                                                  fit.nb2.mixture.model,
+                                                  get.compressed.v1.model,
+                                                  clusters
+                                                  ) {
+          try({
+            if(verbose){
+              message(paste(group, '.', i, " : ", ids[i], sep = ""))
+            }
             # determine k closest cells
-            oc <- ids[-i][order(celld[ids[i], -i, drop = FALSE], decreasing = TRUE)[1:min(k, length(ids)-1)]]
+            oc <- ids[-i][
+              order(celld[ids[i], -i, drop = FALSE], decreasing = TRUE)[
+                1:min(k, length(ids)-1)
+              ]
+            ]
             #set.seed(i)   oc <- sample(ids[-i], k)
             # determine a subset of genes that show up sufficiently often
             #fpm <- rowMeans(t(t(counts[, oc, drop = FALSE])/(ls$ls[oc])))
-            fpm <- apply(t(ca[, oc, drop = FALSE])/(ls$ls[oc]), 2, mean, trim = fpm.estimate.trim, na.rm = TRUE)
+            fpm <- apply(
+              t(ca[, oc, drop = FALSE])/(ls$ls[oc]), 
+              2, 
+              mean, 
+              trim = fpm.estimate.trim, 
+              na.rm = TRUE
+            )
             # rank genes by the number of non-zero occurrences, take top genes
-            vi <- which(rowSums(counts[, oc] > min.count.threshold)  >=  min(ncol(oc)-1, min.nonfailed) & fpm > min.fpm)
-            if(length(vi)<40)  message("WARNING: only ", length(vi), " valid genes were found to fit ", ids[i], " model")
+            vi <- which(
+              rowSums(counts[, oc] > min.count.threshold)  >=  min(ncol(oc)-1, min.nonfailed) & fpm > min.fpm
+            )
+            
+            if(length(vi)<40){
+              message("WARNING: only ", length(vi), " valid genes were found to fit ", ids[i], " model")
+            }
             df <- data.frame(count = counts[vi, ids[i]], fpm = fpm[vi])
 
             # determine failed-component posteriors for each gene
             #fp <- ifelse(df$count <=  min.count.threshold, threshold.prior, 1-threshold.prior)
-            fp <- ifelse(df$count <=  min.count.threshold & df$fpm  >=  median(df$fpm[df$count <=  min.count.threshold]), threshold.prior, 1-threshold.prior)
+            fp <- ifelse(
+              df$count <=  min.count.threshold & df$fpm  >=  median(df$fpm[df$count <=  min.count.threshold]), 
+              threshold.prior, 
+              1-threshold.prior
+            )
             cp <- cbind(fp, 1-fp)
 
             if(linear.fit) {
@@ -1218,7 +1265,18 @@ knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), m
             #plot.nb2.mixture.fit(m1, df, en = ids[i], do.par = FALSE, compressed.models = TRUE)
             return(m1)
             #})
-        })}, n.cores = n.cores)
+        })},
+          ids = ids, 
+          celld = celld, 
+          ca = ca, 
+          fpm.estimate.trim = fpm.estimate.trim,
+          counts = counts, 
+          fit.nb2gth.mixture.model =fit.nb2gth.mixture.model, 
+          fit.nb2.mixture.model = fit.nb2.mixture.model,
+          get.compressed.v1.model = get.compressed.v1.model,
+          clusters = clusters)
+        stopCluster(cl)
+        
         vic <- which(unlist(lapply(seq_along(ml), function(i) {
             if(class(ml[[i]]) == "try-error") {
                 message("ERROR encountered in building a model for cell ", ids[i], " - skipping the cell. Error:")

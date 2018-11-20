@@ -30,7 +30,7 @@ useDynLib(scde)
 # custom additions
 importFrom(Cairo,CairoPNG)
 importFrom(RColorBrewer,brewer.pal)
-importFrom(parallel,mclapply,detectCores)
+importFrom(parallel,mclapply,detectCores,makeCluster,parLapply)
 importFrom(BiocParallel,bplapply,MulticoreParam)
 importFrom(edgeR,calcNormFactors)
 importFrom(MASS,theta.ml,rnegbin,negative.binomial)
